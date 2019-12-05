@@ -1,47 +1,359 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh-CH">
 <head>
-    <title>Play2 WebJars Demo</title>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>
+    <title>GitLab代码统计工具</title>
     <link rel='stylesheet' media='screen' href='/webjars/bootstrap/css/bootstrap.min.css'>
+    <link rel="stylesheet" type="text/css" href="./bootstrap-select/dist/css/bootstrap-select.min.css">
+    <link rel="stylesheet" type="text/css" href="./layui/css/layui.css" media="all">
+
     <script type='text/javascript' src='/webjars/jquery/jquery.min.js'></script>
     <script type='text/javascript' src='/webjars/bootstrap/js/bootstrap.min.js'></script>
+    <script type='text/javascript' src='./laydate/laydate.js'></script>
+    <script type="text/javascript" src="./bootstrap-select/dist/js/bootstrap-select.js"></script>
+    <script type="text/javascript" src="./layui/layui.js"></script>
     <style type="text/css">
         body {
             margin-top: 50px;
         }
+
+        #projectList+div .layui-table-cell {
+            overflow: visible;
+        }
+
+        .layui-table-box {
+            overflow: visible;
+        }
+
+        .layui-table-body {
+            overflow: visible;
+        }
+        /* 设置下拉框的高度与表格单元相同 */
+        td .layui-form-select{
+            margin-top: -10px;
+            margin-left: -15px;
+            margin-right: -15px;
+        }
     </style>
     <script type="text/javascript">
-      $(function() {
-        $("#showModalButton").bind('click', function(event) {
-          $('#myModal').modal()
-        })
-      })
+
+        var users = [];
+        var projects = [];
+        var table;
+
+        /**
+         * 统计
+         */
+        $(function () {
+            $("#submitButton").bind('click', function (event) {
+                var checkStatus = table.checkStatus('projectList');
+                var data = {
+                    gitlabUrl: $("#gitlabUrl").val(),
+                    username: $("#username").val(),
+                    password: $("#password").val(),
+                    usernames: $("#userList").val(),
+                    projects: checkStatus.data,
+                    ifCreateExcel: $("#ifExcel").val() === "0" ? false : true,
+                    period: $("#period").val(),
+                };
+
+                if (data.projects != null && data.projects.length > 0) {
+                    var layer;
+                    layui.use('layer', function () {
+                        layer = layui.layer;
+                        layer.load(2, {
+                            offset: ['50%', "50%"], shade: false
+                        });
+                    });
+                    $.ajax({
+                        url: "/gitlab/codeCount/saveToLocal",    //请求的url地址
+                        dataType: "json",   //返回格式为json
+                        contentType: 'application/json',
+                        async: true,//请求是否异步，默认为异步，这也是ajax重要特性
+                        data: JSON.stringify(data),    //参数值
+                        type: "POST",   //请求方式
+                        success: function (req) {
+                            $('#commitInfosByUser').nextAll().remove();
+                            layer.closeAll('loading');
+                            //请求成功时处理
+                            var commitInfosByProject = req.projectDimension;
+                            var commitInfosByUser = req.userDimension;
+                            for (var key in commitInfosByProject) {
+                                $('#commitInfosByUser').after('<table id="'+key+'"></table>');
+                            }
+
+                            layui.use('table', function () {
+                                var userTable = layui.table;
+                                //第一个实例
+                                userTable.render({
+                                    elem: '#commitInfosByUser'
+                                    , data: commitInfosByUser
+                                    , limit: Number.MAX_VALUE
+                                    , title: "成员维度代码统计"
+                                    , cols: [[ //表头
+                                        {field: 'username', title: '姓名', fixed: 'left', width: '15%', templet:
+                                            '#usernameCss', sort: true}
+                                        , {field: 'additionsAll', title: '总增加行数', width: '15%', templet:
+                                                '#additionsAllCss', sort: true}
+                                        , {field: 'deletionsAll', title: '总删除行数', width: '15%', templet:
+                                                '#deletionsAllCss', sort: true}
+                                        , {field: 'totalAll', title: '总影响行数', width: '15%', templet:
+                                                '#totalAllCss', sort: true}
+                                        , {field: 'projectCount', title: '项目数', width: '15%', templet:
+                                                '#projectCountCss', sort: true}
+                                        , {field: 'details', templet:
+                                                '#detailsCss', title: '项目名-[分支](增加行,移除行,总影响行)'}
+                                    ]]
+                                });
+
+                            });
+
+                            for (var key in commitInfosByProject) {
+
+                                layui.use('table', function () {
+                                    var projectTable = layui.table;
+                                    //第一个实例
+                                    projectTable.render({
+                                        elem: '#' + key
+                                        , data: commitInfosByProject[key]
+                                        , limit: Number.MAX_VALUE
+                                        , title: "项目维度代码统计"
+                                        , cols: [[ //表头
+                                            {field: 'projectName_branch', title: '项目名称-[分支]', fixed: 'left', sort: true}
+                                            , {field: 'committer_name', title: '姓名', sort: true}
+                                            , {templet: '<p>{{createFormat(d.stats.additions)}}</p>', title: '添加行数'}
+                                            , {templet: '<p>{{createFormat(d.stats.deletions)}}</p>', title: '删除行数'}
+                                            , {templet: '<p>{{createFormat(d.stats.total)}}</p>', title: '影响行数'}
+                                        ]]
+                                    });
+
+                                });
+                            }
+                        },
+                        error: function () {
+                            //请求出错处理
+                            layer.closeAll('loading');
+                            alert("统计结果失败！");
+                        }
+                    });
+                }
+            })
+        });
+
+
+        /**
+         * 获取项目和成员列表
+         */
+        function selectProjectAndUserList() {
+
+            var data = {
+                gitlabUrl: $("#gitlabUrl").val(),
+                username: $("#username").val(),
+                password: $("#password").val()
+            };
+
+            var layer;
+            layui.use('layer', function () {
+                layer = layui.layer;
+                layer.load(2, {
+                    offset: ['50%', "50%"], shade: false
+                });
+            });
+            $.ajax({
+                url: "/gitlab/codeCount/getProjectAndUserList", //请求的url地址
+                dataType: "json", //返回格式为json
+                contentType: 'application/json',
+                async: true, //请求是否异步，默认为异步，这也是ajax重要特性
+                data: JSON.stringify(data), //参数值
+                type: "POST", //请求方式
+                success: function (req) {
+                    //请求成功时处理
+                    projects = req.projects;
+                    users = req.usersInfo;
+                    /**
+                     * 项目表格
+                     */
+                    layui.use('table', function () {
+                        table = layui.table;
+                        var form = layui.form;
+                        //第一个实例
+                        table.render({
+                            elem: '#projectList'
+                            , data: projects
+                            , limit: Number.MAX_VALUE
+                            , title: "项目列表"
+                            , cols: [[ //表头
+                                {type: 'checkbox', fixed: 'left', LAY_CHECKED: true}
+                                , {field: 'id', title: '项目id', fixed: 'left', sort: true}
+                                , {field: 'name', title: '项目名称'}
+                                , {field: 'default_branch', title: '默认分支'}
+                                , {templet: '#selectTpl', title: '统计的分支'}
+                            ]]
+                        });
+                        form.on('select(selectBranches)', function(obj) {
+                            for (let i = 0; i <= projects.length; i++) {
+                                if (projects[i].id === obj.elem.id) {
+                                    projects[i].last_branch = obj.value;
+                                    break;
+                                }
+                            }
+                        });
+                    });
+
+                    /**
+                     * 成员列表
+                     */
+                    $('#userList').empty(); //清空select，不然每点一次都循环添加一遍数据越来越多
+
+                    for (var i = 0; i < users.length; i++) {
+                        $('#userList').append('<option value="' + users[i].username + '">' + users[i].name +
+                            '</option>');
+                    }
+                    $('#userList').selectpicker('refresh');
+                    $('#userList').selectpicker('render');
+                    layer.closeAll('loading');
+                },
+                error: function () {
+                    //请求出错处理
+                    alert("获取项目和成员失败！");
+                    layer.closeAll('loading');
+                }
+            });
+        }
+
+        function createFormat(o) {
+            return o;
+        }
+
+        function setCss(d) {
+            if (d.isMark != null) {
+                return 'background-color: #5FB878';
+            } else {
+                return '#fff';
+            }
+        }
+
+        $(function () {
+            laydate.render({
+                elem: '#period', //指定元素
+                type: 'datetime',
+                range: true,
+                trigger: 'click'
+            });
+        });
+
+        $('#userList').selectpicker();
     </script>
 </head>
 <body>
-<div class="navbar navbar-fixed-top">
-    <div class="navbar-inner">
-        <div class="container-fluid">
-            <a id="titleLink" class="brand" href="/">hello, bootstrap</a>
-        </div>
-    </div>
-</div>
 
 <div class="container">
-    <button id="showModalButton" class="btn btn-primary btn-large"><i class="icon-exclamation-sign icon-white"></i> Show a Modal</button>
+    <h3>GitLab代码统计工具 <span class="label label-default">New</span>（导出路径：C:\gitlab_code_count）</h3>
+    <div class="input-group" style="margin-top: 8px;">
+        <span class="input-group-addon">Gitlab地址:</span>
+        <input id="gitlabUrl" type="text" class="form-control" placeholder="请输入Gitlab地址" aria-describedby="gitlabUrl">
+    </div>
+    <div class="input-group" style="margin-top: 8px;">
+        <span class="input-group-addon">账户:</span>
+        <input id="username" type="text" class="form-control" placeholder="请输入用户账户名" aria-describedby="username"
+               style="margin-right: 8px;">
+
+        <span class="input-group-addon">密码:</span>
+        <input id="password" type="password" class="form-control" placeholder="请输入用户账户密码" aria-describedby="password">
+    </div>
+
+    <button id="selectProject" class="btn btn-primary btn-large" onclick="selectProjectAndUserList()" style="margin-top:8px;">
+        <i class="icon-exclamation-sign icon-white"></i> 查询项目和成员
+    </button>
+
+    <table id="projectList"></table>
+
+    <div class="input-group" style="margin-top: 8px;">
+        <span class="input-group-addon">成员:</span>
+        <select id="userList" name="userList" class="selectpicker show-tick form-control" multiple
+                data-live-search="true" data-actions-box="true" aria-describedby="userList"></select>
+    </div>
+
+    <div class="input-group" style="margin-top: 8px;">
+        <span class="input-group-addon">是否生成Excel:</span>
+        <select id="ifExcel" name="ifExcel" class="selectpicker show-tick form-control"
+                aria-describedby="ifExcel">
+            <option value="0">否</option>
+            <option value="1">是</option>
+        </select>
+    </div>
+
+    <div class="input-group" style="margin-top: 8px;">
+        <span class="input-group-addon">时间段:</span>
+        <input id="period" type="text" class="form-control" placeholder="请选择时间段" aria-describedby="period">
+    </div>
+
+    <button id="submitButton" class="btn btn-primary btn-large" style="margin-top: 8px;margin-bottom: 50px;"><i
+            class="icon-exclamation-sign icon-white"></i> 统计
+    </button>
+
+    <table id="commitInfosByUser"></table>
 </div>
 
-<div id="myModal" class="modal hide fade">
-    <div class="modal-header">
-        <button class="close" data-dismiss="modal">&times;</button>
-        <h3>This is a Modal</h3>
+<script type="text/html" id="selectTpl">
+    <div class="layui-form-item">
+        <select id="{{d.id}}" name="branches" lay-filter="selectBranches">
+            {{#  layui.each(d.branchesInfos, function(index, item){ }}
+            {{#  if (item.name === d.last_branch) { }}
+            <option value="{{ item.name }}" selected>{{item.name}}</option>
+            {{#   } else { }}
+            <option value="{{ item.name }}">{{item.name}}</option>
+            {{#   } }}
+            {{#  }); }}
+            {{#  if(d.branchesInfos.length === 0){ }}
+            <option value="dev" selected>dev</option>
+            {{#  } }}
+        </select>
     </div>
-    <div class="modal-body">
-        <p>Bootstrap depends on jQuery.  So when you specify Bootstrap as a dependency you get jQuery too.</p>
-    </div>
-    <div class="modal-footer">
-        <a href="#" class="btn" data-dismiss="modal">Close</a>
-    </div>
-</div>
+</script>
+
+<script type="text/html" id="usernameCss">
+    {{#  if(d.isMark != null){ }}
+    <span style="color: #f04134;">{{ d.username }}</span>
+    {{#  } else { }}
+    {{ d.username }}
+    {{#  } }}
+</script>
+<script type="text/html" id="additionsAllCss">
+    {{#  if(d.isMark != null){ }}
+    <span style="color: #f04134;">{{ d.additionsAll }}</span>
+    {{#  } else { }}
+    {{ d.additionsAll }}
+    {{#  } }}
+</script>
+<script type="text/html" id="deletionsAllCss">
+    {{#  if(d.isMark != null){ }}
+    <span style="color: #f04134;">{{ d.deletionsAll }}</span>
+    {{#  } else { }}
+    {{ d.deletionsAll }}
+    {{#  } }}
+</script>
+<script type="text/html" id="totalAllCss">
+    {{#  if(d.isMark != null){ }}
+    <span style="color: #f04134;">{{ d.totalAll }}</span>
+    {{#  } else { }}
+    {{ d.totalAll }}
+    {{#  } }}
+</script>
+<script type="text/html" id="projectCountCss">
+    {{#  if(d.isMark != null){ }}
+    <span style="color: #f04134;">{{ d.projectCount }}</span>
+    {{#  } else { }}
+    {{ d.projectCount }}
+    {{#  } }}
+</script>
+<script type="text/html" id="detailsCss">
+    {{#  if(d.isMark != null){ }}
+    <span style="color: #f04134;">{{ d.details }}</span>
+    {{#  } else { }}
+    {{ d.details }}
+    {{#  } }}
+</script>
+
 </body>
 </html>
